@@ -22,6 +22,16 @@ from webdriver_manager.chrome import ChromeDriverManager
 # ---------------------------
 # Globals (will be set at runtime)
 # ---------------------------
+
+VERSION = "25.09.15.1"
+
+# Tự động ghi version ra file version.txt
+try:
+    with open("version.txt", "w", encoding="utf-8") as f:
+        f.write(VERSION)
+except Exception as e:
+    pass
+
 driver = None
 wait = None
 main_window = None
@@ -30,12 +40,51 @@ TOTP_SECRETS = {}
 selected_indices = []
 videos_per_email = 0
 delay_sec = 0
-PROFILE_NAME_DEFAULT = "Scoopz GMAIL 1"
-selenium_profile_base = r"F:\SeleniumProfiles"
+PROFILE_NAME_DEFAULT = "F:/SeleniumProfiles/Scoopz GMAIL 1"
+selenium_profile_base = PROFILE_NAME_DEFAULT
 video_folder_default = r"F:/VIDEO UP/INSTAGRAM/VIDEO AUTOWEB/Scoopz GMAIL 1"
 debug_port_default = 9001
 stop_flag = False
 CONFIG_FILE = "config.json"
+
+chrome_hidden = False  # trạng thái ẩn/hiện
+
+def hide_show_chrome(driver, hide=True):
+    try:
+        chrome_driver_pid = driver.service.process.pid
+        chrome_pid = None
+        for proc in psutil.Process(chrome_driver_pid).children():
+            if "chrome.exe" in proc.name().lower():
+                chrome_pid = proc.pid
+                break
+        if chrome_pid is None:
+            print("Không tìm thấy PID Chrome thực sự")
+            return
+    except Exception as e:
+        print("Lỗi khi lấy PID Chrome:", e)
+        return
+
+    def enum_windows(hwnd, windows):
+        tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if pid == chrome_pid and win32gui.IsWindow(hwnd):
+            windows.append(hwnd)
+        return True
+
+    windows = []
+    win32gui.EnumWindows(enum_windows, windows)
+
+    for hwnd in windows:
+        try:
+            title = win32gui.GetWindowText(hwnd)
+            if not title.strip():
+                continue
+            if hide:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.SetForegroundWindow(hwnd)
+        except Exception as e:
+            print("Lỗi khi ẩn/hiện cửa sổ:", e)
 
 # ---------------------------
 # GUI App
@@ -43,48 +92,56 @@ CONFIG_FILE = "config.json"
 class GUIApp:
     def __init__(self, root):
         self.root = root
-        root.title("Scoopz Auto Uploader - Gmail v25.09.14.0")
-        root.geometry("750x620")
+        root.title(f"Scoopz Auto Uploader - Gmail v{VERSION}")
+        root.geometry("650x650")
 
         # top frame: profile, video folder, controls
         top = ttk.Frame(root, padding=8)
         top.pack(fill="x")
 
         # Profile name + Browse
-        ttk.Label(top, text="Profile name:").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, text="Thư mục Profile:").grid(row=0, column=0, sticky="w")
         self.profile_var = tk.StringVar(value=PROFILE_NAME_DEFAULT)
         ttk.Entry(top, textvariable=self.profile_var, width=35).grid(row=0, column=1, sticky="w", padx=6)
-        ttk.Button(top, text="Browse", command=self.browse_profile).grid(row=0, column=2, sticky="w", padx=6)
+        tk.Button(top, text="Browse", command=self.browse_profile).grid(row=0, column=2, sticky="w", padx=6)
 
         # Video folder + Browse
-        ttk.Label(top, text="Video folder:").grid(row=1, column=0, sticky="w")
+        ttk.Label(top, text="Thư mục Video:").grid(row=1, column=0, sticky="w")
         self.video_folder_var = tk.StringVar(value=video_folder_default)
         ttk.Entry(top, textvariable=self.video_folder_var, width=60).grid(row=1, column=1, sticky="w", padx=6)
-        ttk.Button(top, text="Browse", command=self.browse_folder).grid(row=1, column=2, sticky="w", padx=6)
+        tk.Button(top, text="Browse", command=self.browse_folder).grid(row=1, column=2, sticky="w", padx=6)
+
+        ttk.Label(top, text="Cổng port Chrome:").grid(row=2, column=0, sticky="w")
+        self.port_entry = ttk.Entry(top, width=10)
+        self.port_entry.insert(0, str(debug_port_default))
+        self.port_entry.grid(row=2, column=1, sticky="w", padx=6)
 
         # Videos per account
-        ttk.Label(top, text="Số video/account (0 = tất cả):").grid(row=2, column=0, sticky="w")
+        ttk.Label(top, text="Số video/account (0 = tất cả):").grid(row=3, column=0, sticky="w")
         self.videos_entry = ttk.Entry(top, width=10)
         self.videos_entry.insert(0, "0")
-        self.videos_entry.grid(row=2, column=1, sticky="w", padx=6)
+        self.videos_entry.grid(row=3, column=1, sticky="w", padx=6)
 
         # Delay
-        ttk.Label(top, text="Delay giữa mỗi upload (giây):").grid(row=3, column=0, sticky="w")
+        ttk.Label(top, text="Delay giữa mỗi upload (giây):").grid(row=4, column=0, sticky="w")
         self.delay_entry = ttk.Entry(top, width=10)
         self.delay_entry.insert(0, "0")
-        self.delay_entry.grid(row=3, column=1, sticky="w", padx=6)
+        self.delay_entry.grid(row=4, column=1, sticky="w", padx=6)
 
         # Buttons: Load Accounts, Start, Stop, Quit, Save Config
+        btn_font = ("Consolas", 10, "bold") 
         btn_frame = ttk.Frame(top)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=8, sticky="w")
-        self.load_btn = ttk.Button(btn_frame, text="Load Accounts (Open Google popup)", command=self.threaded(self.load_accounts))
+        btn_frame.grid(row=5, column=0, columnspan=3, pady=8, sticky="w")
+        self.load_btn = tk.Button(btn_frame, text="Load Accounts", command=self.threaded(self.load_accounts), fg="#000000", bg="#E0E0E0", font=btn_font)
         self.load_btn.grid(row=0, column=0, padx=6)
-        self.start_btn = ttk.Button(btn_frame, text="Start Upload", command=self.threaded(self.start_upload))
+        self.start_btn = tk.Button(btn_frame, text="Start Upload", command=self.threaded(self.start_upload), fg="#FFFFFF", bg="#28a745", font=btn_font)
         self.start_btn.grid(row=0, column=1, padx=6)
-        self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.set_stop_flag)
-        self.stop_btn.grid(row=0, column=3, padx=6)
-        ttk.Button(btn_frame, text="Quit", command=self.quit_chrome_only).grid(row=0, column=2, padx=6)
-        ttk.Button(btn_frame, text="Save Config", command=self.save_config).grid(row=0, column=4, padx=6)
+        self.stop_btn = tk.Button(btn_frame, text="Stop Upload", command=self.set_stop_flag, fg="#FFFFFF", bg="#dc3545", font=btn_font)
+        self.stop_btn.grid(row=0, column=2, padx=6)
+        tk.Button(btn_frame, text="Thoát Chrome", command=self.quit_chrome_only, fg="#FFFFFF", bg="#6c757d", font=btn_font).grid(row=0, column=3, padx=6)
+        tk.Button(btn_frame, text="Lưu Config", command=self.save_config, fg="#000000", bg="#E0E0E0", font=btn_font).grid(row=0, column=4, padx=6)
+        self.btn_toggle_chrome = tk.Button(btn_frame, text="Ẩn Chrome", command=self.toggle_chrome, fg="#000000", bg="#E0E0E0", font=btn_font, width=12)
+        self.btn_toggle_chrome.grid(row=0, column=5, padx=6)
 
         # middle: accounts checkbox area
         mid = ttk.Frame(root, padding=8)
@@ -165,7 +222,12 @@ class GUIApp:
         bottom = ttk.Frame(root, padding=8)
         bottom.pack(fill="both", expand=True)
         ttk.Label(bottom, text="Log:").pack(anchor="w")
-        self.log_box = scrolledtext.ScrolledText(bottom, wrap="word", height=20, font=("Consolas", 10))
+        self.log_box = scrolledtext.ScrolledText(bottom, wrap="none", height=20, font=("Consolas", 10), undo=True)
+
+        x_scroll = tk.Scrollbar(bottom, orient="horizontal", command=self.log_box.xview)
+        x_scroll.pack(side="bottom", fill="x")
+        self.log_box.configure(xscrollcommand=x_scroll.set)
+
         self.log_box.pack(fill="both", expand=True)
         self.log_box.tag_config("red", foreground="red")
         self.log_box.tag_config("green", foreground="green")
@@ -212,6 +274,15 @@ class GUIApp:
         finally:
             self.log_box.configure(state="disabled")
 
+    def toggle_chrome(self):
+        global chrome_hidden
+        if driver is None:
+            self.log(f"Không có chrome nào đang hoạt động.", "red")
+            return
+        chrome_hidden = not chrome_hidden
+        hide_show_chrome(driver, hide=chrome_hidden)
+        self.btn_toggle_chrome.config(text="Hiện Chrome" if chrome_hidden else "Ẩn Chrome")
+
     # ---------------------------
     # Config functions
     # ---------------------------
@@ -219,6 +290,7 @@ class GUIApp:
         config = {
             "profile_name": self.profile_var.get().strip(),
             "video_folder": self.video_folder_var.get().strip(),
+            "debug_port": self.port_entry.get().strip(),
             "videos_per_account": self.videos_entry.get().strip(),
             "delay_sec": self.delay_entry.get().strip()
         }
@@ -236,6 +308,8 @@ class GUIApp:
                     config = json.load(f)
                 self.profile_var.set(config.get("profile_name", PROFILE_NAME_DEFAULT))
                 self.video_folder_var.set(config.get("video_folder", video_folder_default))
+                self.port_entry.delete(0, tk.END)
+                self.port_entry.insert(0, str(config.get("debug_port", debug_port_default)))
                 self.videos_entry.delete(0, tk.END)
                 self.videos_entry.insert(0, str(config.get("videos_per_account", "0")))
                 self.delay_entry.delete(0, tk.END)
@@ -286,16 +360,30 @@ class GUIApp:
     # Quit & Stop
     # ---------------------------
     def quit_chrome_only(self):
-        global driver
-        if driver:
-            try:
-                driver.quit()
-                driver = None
-                self.log("Chrome đã được thoát.", "green")
-            except Exception as e:
-                self.log(f"Lỗi khi thoát Chrome: {e}", "red")
-        else:
-            self.log("Không có Chrome nào đang chạy.", "yellow")
+          global driver
+          if driver:
+               try:
+                    chrome_pid = driver.service.process.pid  # pid của chromedriver
+                    driver.quit()
+                    driver = None
+                    self.log("Chrome đã được thoát.", "green")
+                    
+                    # Kill các tiến trình con của chromedriver nếu còn tồn tại
+                    if psutil.pid_exists(chrome_pid):
+                         parent = psutil.Process(chrome_pid)
+                         for child in parent.children(recursive=True):
+                              try:
+                                   child.kill()
+                              except:
+                                   pass
+                         try:
+                              parent.kill()
+                         except:
+                              pass
+               except Exception as e:
+                    self.log(f"Lỗi khi thoát Chrome: {e}", "red")
+          else:
+               self.log("Không có Chrome nào đang chạy.", "yellow")
 
     def quit_all(self):
         global driver
@@ -313,7 +401,7 @@ class GUIApp:
     def set_stop_flag(self):
         global stop_flag
         stop_flag = True
-        self.log("→ Stop được kích hoạt, upload sẽ dừng sau video hiện tại...", "red")
+        # self.log("→ Stop được kích hoạt, upload sẽ dừng sau video hiện tại...", "red")
 
     # ---------------------------
     # Select-all checkbox handling
@@ -351,6 +439,10 @@ class GUIApp:
         self.log(f"→ Khởi tạo Chrome với profile: {profile_name}", "blue")
         selenium_profile = os.path.join(selenium_profile_base, profile_name)
         debug_port = debug_port_default
+        try:
+            debug_port = int(self.port_entry.get().strip())
+        except Exception:
+            self.log(f"Port không hợp lệ, dùng mặc định {debug_port_default}", "yellow")
 
         options = webdriver.ChromeOptions()
         options.add_argument(f"--user-data-dir={selenium_profile}")
@@ -367,26 +459,33 @@ class GUIApp:
         options.add_experimental_option('useAutomationExtension', False)
         options.add_argument("--log-level=3")
 
-        # try creating Service with creationflags to hide chromedriver console (Selenium 4+)
         chromedriver_path = ChromeDriverManager().install()
+
+        driver = webdriver.Chrome(
+            executable_path=chromedriver_path, 
+            chrome_options=options,
+            service_args=['--silent'],  # ẩn log chromedriver
+            service_log_path='NUL'      # ẩn log trên Windows
+        )
+
+        time.sleep(1)
+
+        def enum_windows_callback(hwnd, result):
+            if win32gui.IsWindowVisible(hwnd):
+               title = win32gui.GetWindowText(hwnd)
+               if "chromedriver" in title.lower():
+                   result.append(hwnd)
+         
+        windows = []
+        win32gui.EnumWindows(enum_windows_callback, windows)
+
+        if windows:
+            win32gui.ShowWindow(windows[0], win32con.SW_MINIMIZE)
+
         self.log(f"chromedriver: {chromedriver_path}", "blue")
-        try:
-            creation_flags = subprocess.CREATE_NO_WINDOW
-            service = Service(chromedriver_path, log_path=os.devnull)
-            try:
-                service.creationflags = creation_flags
-            except Exception:
-                pass
 
-            driver_local = webdriver.Chrome(service=service, options=options)
-        except TypeError:
-            # fallback for old selenium: use executable_path (may show chromedriver console)
-            # self.log("Warning: Selenium version may be old, using fallback driver creation (chromedriver console may appear).", "yellow")
-            driver_local = webdriver.Chrome(executable_path=chromedriver_path, options=options, service_log_path=os.devnull)
-
-        driver = driver_local
         wait = WebDriverWait(driver, 30)
-        # hide navigator.webdriver
+
         try:
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                 "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -599,7 +698,7 @@ class GUIApp:
     def set_stop_flag(self):
         global stop_flag
         stop_flag = True
-        self.log("→ Stop được kích hoạt, upload sẽ dừng sau video hiện tại...", "red")
+        # self.log("→ Stop được kích hoạt, upload sẽ dừng sau video hiện tại...", "red")
 
     # -------------------------
     # Start upload (reads GUI values, then calls run_upload)
@@ -792,6 +891,10 @@ def upload_videos_for_email_gui(selected_email, email_index, driver_local, wait_
         gui.log(f"Lỗi đọc thư mục video: {e}", "red")
         return False
 
+    if not video_files:
+        gui.log(f"Không còn video nào trong thư mục {video_folder}. Dừng tool!", "red")
+        return False
+
     def natural_sort_key(s):
         return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
     video_files = sorted(video_files, key=lambda x: natural_sort_key(os.path.basename(x)))
@@ -800,14 +903,11 @@ def upload_videos_for_email_gui(selected_email, email_index, driver_local, wait_
         video_files = video_files[:videos_per_email_local]
 
     total_videos = len(video_files)
-    if total_videos == 0:
-        gui.log(f"Không có video nào trong thư mục {video_folder}", "red")
-        return False
 
     for idx, video_path in enumerate(video_files, 1):
         # check global stop flag before starting next video
         if stop_flag:
-            gui.log("Stop flag được kích hoạt → dừng upload cho account hiện tại.", "red")
+            #gui.log("Stop được kích hoạt → dừng upload cho account hiện tại.", "red")
             return False
 
         gui.log(f"[{email_index}] {selected_email} Upload video: {os.path.basename(video_path)}", "cyan")
@@ -839,7 +939,7 @@ def upload_videos_for_email_gui(selected_email, email_index, driver_local, wait_
             while True:
                 # allow stopping while waiting for upload
                 if stop_flag:
-                    gui.log("Stop flag được kích hoạt trong quá trình upload → dừng.", "red")
+                    #gui.log("Stop được kích hoạt trong quá trình upload → dừng.", "red")
                     return False
                 try:
                     progress = driver_local.find_element(By.CSS_SELECTOR, progress_css)
@@ -1016,6 +1116,10 @@ def run_upload(gui: GUIApp):
             success_accounts.append(f"[{email_index}] {selected_email}")
         else:
             failed_accounts.append(f"[{email_index}] {selected_email}")
+
+        if stop_flag:
+            gui.log("Stop upload → dừng tất cả sau video hiện tại.", "red")
+            break
 
         # if not last account, logout and get popup again
         if i != len(selected_indices) - 1:
