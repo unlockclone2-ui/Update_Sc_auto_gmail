@@ -23,7 +23,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Globals (will be set at runtime)
 # ---------------------------
 
-VERSION = "25.09.15.1"
+VERSION = "25.09.15.2"
 
 # Tự động ghi version ra file version.txt
 try:
@@ -1178,3 +1178,4 @@ if __name__ == "__main__":
     gui = GUIApp(root)
     root.protocol("WM_DELETE_WINDOW", gui.quit_all)
     root.mainloop()
+
